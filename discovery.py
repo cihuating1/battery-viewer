@@ -19,6 +19,13 @@ from drivers import headsetcontrol as hsc
 VENDOR_DRIVERS = {
     0x046D: ("logitech_hidpp", "mouse"),    # Logitech（Lightspeed / Unifying 接收器、有线模式）
     0x374A: ("valkyrie_mag", "keyboard"),   # VALKYRIE 瓦尔基里
+    # 以下走 hid_universal（battery.py 内置协议表）
+    0x373B: ("hid_universal", "mouse"),     # ATK（协议 1：0xFF02 / 协议 2：0xFF05）
+    0x3554: ("hid_universal", "mouse"),     # VXE / VGN
+    0x3367: ("hid_universal", "mouse"),     # Endgame Gear
+    0x3057: ("hid_universal", "mouse"),     # VAXEE / ZYGEN
+    0x1915: ("hid_universal", "mouse"),     # Nordic nRF 方案接收器
+    0x3654: ("hid_universal", "headset"),   # DARKRIM 杰理方案耳机
 }
 
 GLYPH_KEYWORDS = [
@@ -151,7 +158,14 @@ def _scan_hid(skip: set[str], probe: bool) -> list[Candidate]:
                 continue
             out.append(_probe(c) if probe else c)
         elif any(i.is_vendor_page for i in items):
-            # 带厂商私有接口的外设：大概率有电量，但协议未知
+            # 带厂商私有接口的外设：先试标准 HID 电量字段，读到了就当作可添加
+            c = Candidate(key=candidate_key("hid_universal", params), name=name, driver="hid_universal",
+                          params=params, glyph=guess_glyph(name, default_glyph), source="2.4G / USB")
+            if c.key in skip:
+                continue
+            if probe and _probe(c).readable:
+                out.append(c)
+                continue
             out.append(Candidate(key=f"unknown:{vid:04x}:{pid:04x}", name=name, driver="", params=params,
                                  glyph=guess_glyph(name, default_glyph), source="2.4G / USB",
                                  supported=False, note=f"暂无驱动 · VID 0x{vid:04X} PID 0x{pid:04X}"))
