@@ -1,12 +1,43 @@
-# 设备电量查看器
+# 设备电量查看器 · 电量岛
 
-Windows 上读取 2.4G 无线外设电量的小工具。**纯 ctypes 调系统 DLL，零第三方依赖**——
-不用 hidapi、不用 pystray、不用 Pillow、不用 pywin32，装了 Python 就能跑。
+Windows 上读取无线外设电量的托盘小工具。HID 底层**纯 ctypes 调系统 DLL**，托盘面板用 PySide6。
 
-## ⚠️ 只支持这两台设备
+> 本项目基于 [yszyszysz233/2.4G-battery-viewer](https://github.com/yszyszysz233/2.4G-battery-viewer)
+> 改造，HID 底层、蓝牙电量读取与逆向方法均来自原项目，感谢原作者。
+> 托盘面板参考了 [ChargeDock](https://github.com/SgZincanya/ChargeDock) 的交互。
 
-这**不是一个通用工具**。协议是逆向我们这两台具体设备得到的——换成别的鼠标或耳机，
-大概率一个字节都读不出来（界面会显示「没有可用的读取方式」）。
+## 电量岛（托盘版）
+
+```bash
+pip install PySide6
+python chargedock_app.py      # 或双击 run_chargedock.bat（无控制台窗口）
+```
+
+- **托盘图标 = 电量最低的设备**：外圈电量环（绿 > 50%、黄 21–50%、红 ≤ 20%）+ 中间设备图标；
+  `config.json` 里设 `"tray_show_number": true` 则在环内显示电量数字
+- 左键托盘展开电量面板，点空白处 / 15 秒后自动收起
+- **添加设备不用改文件**：面板右上角「＋」或托盘右键「添加 / 管理设备」→ 自动扫描本机外设并试读电量，
+  能读到的点「添加」即可；已添加的设备可改图标、隐藏、删除
+- **自动发现**：后台每 5 分钟扫描一次，发现可读电量的新设备会弹通知，点通知即可添加
+  （不想要的点「忽略」；`"auto_discover": false` 可关闭）
+
+### 不用逆向就能识别的设备
+
+| 来源 | 驱动 | 说明 |
+|---|---|---|
+| 蓝牙设备 | `bluetooth` | 读 Windows 蓝牙协议栈记录的电量，蓝牙耳机 / 鼠标 / 手柄通用 |
+| 耳机 | `headsetcontrol` | 借用 [HeadsetControl](https://github.com/Sapd/HeadsetControl) 的协议库（SteelSeries / Logitech / Corsair / HyperX 等几十款）。需下载 `headsetcontrol.exe` 放到 `tools/` 目录或 PATH |
+| 罗技 2.4G / 有线 | `logitech_hidpp` | HID++ 2.0，大多数 Lightspeed / Unifying 设备通用 |
+| 瓦尔基里 | `valkyrie_mag` | VK MAG75 Max 等（WebHID 0xF7 指令） |
+
+小厂 / 白牌的 2.4G 设备没有公开协议，扫描时会显示为「暂无驱动」并附 VID/PID，
+仍需按下文方法逆向后在 `drivers/` 里写一个驱动——放进去的 `.py` 会被自动注册，
+文件名即 `config.json` 里的 `driver` 名。命令行工具：`python device_manager.py scan | add | new-driver`。
+
+## ⚠️ 原项目的两台设备
+
+下面是原项目逆向的两台设备（简洁面板 `my_devices.py` 与调试版 `app.py` 用）。
+协议是逆向这两台具体设备得到的——换成别的鼠标或耳机，大概率一个字节都读不出来。
 
 | 设备 | VID:PID | 读取方式 |
 |---|---|---|
@@ -162,6 +193,7 @@ prompt 里已经写好了硬性约束、协议模板、7 条会踩的坑和验�
 
 - Windows 10 / 11
 - Python 3.10+（需要 `tkinter`，官方安装包默认自带）
+- 电量岛托盘版另需 `pip install PySide6`
 
 ## 目录说明
 
@@ -178,6 +210,12 @@ prompt 里已经写好了硬性约束、协议模板、7 条会踩的坑和验�
 | `win_link.py` | 软连接：符号链接 / 目录 junction / 硬链接，按权限自动降级 |
 | `win_shell.py` | 已知文件夹路径 + 用 ctypes COM 创建 `.lnk` |
 | `app.py` | 完整调试版界面 |
+| `chargedock_app.py` | **电量岛**托盘面板 + 设备管理窗口（PySide6） |
+| `discovery.py` | 设备自动发现：蓝牙 / HeadsetControl / 已知厂商 VID，逐个试读电量 |
+| `drivers/` | 设备驱动，新增 `.py` 自动注册 |
+| `config.json` | 设备列表（由「管理设备」窗口自动维护） |
+| `icons.py` | 设备图标与托盘电量环图标 |
+| `device_manager.py` | 命令行：列出 / 扫描 / 添加设备、生成驱动模板 |
 | `PROMPT.md` | 把整个项目整理成一份可复用的提示词 |
 
 ## 两个值得一提的实现细节

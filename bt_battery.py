@@ -169,7 +169,7 @@ def list_bluetooth_devices() -> list[BluetoothDevice]:
                     break
                 index += 1
                 iid = _instance_id(hdev, info)
-                if not iid.upper().startswith("BTHENUM") or iid in found:
+                if not iid.upper().startswith(("BTHENUM", "BTHLE")) or iid in found:
                     continue
                 name = _device_string(hdev, info, SPDRP_FRIENDLYNAME)
                 if not name:

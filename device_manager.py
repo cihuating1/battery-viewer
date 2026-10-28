@@ -64,8 +64,8 @@ def cmd_scan() -> None:
         if key in seen:
             continue
         seen.add(key)
-        mfg = hw.get_manufacturer_string(d.path) or ""
-        prod = hw.get_product_string(d.path) or ""
+        mfg = d.manufacturer or ""
+        prod = d.product or ""
         is_known = d.vid in known_vids
         status_tag = "[已纳管]" if is_known else "[新外设候选]"
         found.append((status_tag, d.vid, d.pid, mfg, prod))
