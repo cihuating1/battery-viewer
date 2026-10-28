@@ -23,7 +23,9 @@ import discovery
 from drivers import create_driver
 from icons import symbol, app_icon, tray_icon
 
-CONFIG_PATH = Path(__file__).parent / "config.json"
+# 打包成 exe 后，config.json 放在 exe 旁边（而不是临时解压目录）
+APP_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
+CONFIG_PATH = APP_DIR / "config.json"
 
 PALETTES = {
     "light": {
@@ -840,8 +842,11 @@ def main():
     app = QApplication.instance() or QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     controller = ChargeDockController(app)
-    # 启动时直接弹出一次展示给用户
-    controller.reveal()
+    # 启动时直接弹出一次展示给用户；首次运行（还没有设备）直接打开设备管理并扫描
+    if controller.readings:
+        controller.reveal()
+    else:
+        controller.open_manager()
     sys.exit(app.exec())
 
 

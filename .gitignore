@@ -20,3 +20,8 @@ desktop.ini
 
 # 厂商网页驱动源码（版权归厂商，仅本地逆向参考）
 vkhub.js
+
+# 打包产物
+dist/
+build/
+*.spec

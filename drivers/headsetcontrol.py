@@ -18,15 +18,15 @@ from typing import Optional
 
 from .base import BaseDriver, BatteryReading
 
-ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).parent.parent))
+ROOT = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent.parent
 
 
 def find_executable(custom: str = "") -> Optional[str]:
     if custom and Path(custom).exists():
         return custom
-    local = ROOT / "tools" / "headsetcontrol.exe"
-    if local.exists():
-        return str(local)
+    for local in (ROOT / "tools" / "headsetcontrol.exe", ROOT / "headsetcontrol.exe"):
+        if local.exists():
+            return str(local)
     return shutil.which("headsetcontrol")
 
 
