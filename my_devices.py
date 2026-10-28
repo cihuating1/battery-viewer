@@ -1,132 +1,77 @@
 # -*- coding: utf-8 -*-
-"""我的设备电量 —— 只显示 ATK 鼠标 + DARKRIM 耳机的简洁面板
-
-用法：
-    python my_devices.py            打开界面（默认自动刷新）
-    python my_devices.py --once     命令行读一次就退出
-
-界面只有两块卡片，各显示一个设备的电量，可自动刷新。
-底层复用 battery.py / darkrim_proto.py 里已经验证过的协议。
+"""我的外设电量监控窗口（动态设备与精美深色卡片）
+支持：GPW3、瓦尔基里 MAG75 Max，以及 config.json 中配置的任何新设备
 """
 
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import queue
+import sys
 import threading
 import time
 import traceback
 from dataclasses import dataclass
-from typing import Optional
+from pathlib import Path
+from typing import Optional, List, Dict, Any
 
-import hid_win as hw
-import battery as bt
-import darkrim_proto as drp
-import tray_common as tc
-import win_link
-from hid_win import HidInterface
+from drivers import create_driver
+from drivers.base import BatteryReading
 
-
-# ==========================================================================
-# 读取层
-# ==========================================================================
-@dataclass
-class Reading:
-    title: str
-    subtitle: str
-    level: Optional[int] = None
-    status: str = ""
-    detail: str = ""
-    error: str = ""
-    extra: str = ""
-
-    @property
-    def ok(self) -> bool:
-        return self.level is not None
+CONFIG_PATH = Path(__file__).parent / "config.json"
 
 
-def _find(vid: int, usage_page: int, output_len: int = 0) -> Optional[HidInterface]:
-    for d in hw.enumerate_hid():
-        if d.vid == vid and d.usage_page == usage_page:
-            if not output_len or d.output_len == output_len:
-                return d
-    return None
+def load_config() -> dict:
+    if not CONFIG_PATH.exists():
+        return {
+            "poll_interval_sec": 30,
+            "devices": []
+        }
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
-def read_atk() -> Reading:
-    """ATK / VXE 无线鼠标（内置协议 2）。"""
-    r = Reading("ATK 鼠标", "无接收器")
-    iface = _find(0x373B, 0xFF05, 64) or _find(0x373B, 0xFF02)
-    if iface is None:
-        r.error = "没找到接收器（请把 2.4G 接收器插上）"
-        return r
-    r.subtitle = f"{iface.vid_pid} · {iface.product or '2.4G 接收器'}"
-    try:
-        res = bt.strategy_vendor_protocol(iface) or bt.strategy_standard_battery_usage(iface)
-    except Exception as e:
-        r.error = f"读取出错：{e}"
-        return r
-    if res is None:
-        r.error = "这台设备没有可用的读取方式"
-        return r
-    if res.ok:
-        r.level = res.level
-        r.status = res.status_text
-        r.detail = res.source
-    else:
-        r.error = res.detail or "读取失败"
-    return r
-
-
-def read_darkrim() -> Reading:
-    """DARKRIM SHADOW 耳机（杰理方案 dongle，逆向协议）。"""
-    r = Reading("DARKRIM 耳机", "未连接")
-    try:
-        info = drp.read_info(timeout=0.35)
-    except Exception as e:
-        r.error = f"读取出错：{e}"
-        return r
-    if not info.online:
-        r.error = info.detail or "没找到 dongle"
-        return r
-    r.subtitle = f"3654:6901 · {info.name or 'DARKRIM'}"
-    r.level = info.battery
-    r.status = ""
-    r.detail = "私有 TLV 协议（TLV 0x01 = 电量）"
-    bits = []
-    if info.dongle_firmware:
-        bits.append(f"dongle 固件 {info.dongle_firmware}")
-    if info.headset_firmware:
-        bits.append(f"耳机固件 {info.headset_firmware}")
-    if info.address:
-        bits.append(f"地址 {info.address}")
-    if info.status_code is not None:
-        bits.append(f"状态码 {info.status_code}")
-    r.extra = " · ".join(bits)
-    if r.level is None and not r.error:
-        r.error = "耳机没有上报电量（请确认耳机已开机并连上）"
-    return r
-
-
-def read_all() -> list[Reading]:
-    return [read_atk(), read_darkrim()]
+def read_all_devices() -> List[BatteryReading]:
+    cfg = load_config()
+    results = []
+    for dev in cfg.get("devices", []):
+        if not dev.get("enabled", True):
+            continue
+        try:
+            drv = create_driver(dev["driver"], dev["id"], dev["name"], dev.get("params", {}))
+            res = drv.read_battery()
+            results.append(res)
+        except Exception as e:
+            results.append(BatteryReading(
+                device_id=dev.get("id", "unknown"),
+                name=dev.get("name", "未知设备"),
+                error=f"驱动加载异常: {e}"
+            ))
+    return results
 
 
 # ==========================================================================
-# 命令行模式
+# 命令行测试
 # ==========================================================================
 def cli_once() -> None:
-    for r in read_all():
+    results = read_all_devices()
+    print("=" * 50)
+    print("当前外设电量状态：")
+    print("=" * 50)
+    for r in results:
         if r.ok:
-            print(f"{r.title}: {r.level}%   {r.detail}")
-            if r.extra:
-                print(f"    {r.extra}")
+            charge = " [充电中]" if r.is_charging else ""
+            print(f"[+] {r.name}: {r.level}% [{r.status}]{charge}")
+            if r.detail:
+                print(f"    详情: {r.detail}")
         else:
-            print(f"{r.title}: 读取失败 —— {r.error}")
+            print(f"[x] {r.name}: 读取失败 -> {r.error}")
 
 
 # ==========================================================================
-# 界面
+# UI 界面 (现代半透明深色卡片)
 # ==========================================================================
 BG = "#1b1c1f"
 PANEL = "#232529"
@@ -136,7 +81,7 @@ MUTED = "#9aa0a6"
 FONT = ("Microsoft YaHei UI", 10)
 
 LEVEL_STYLE = [
-    (60, "#5ddc8a", "电量充足"),
+    (60, "#5ddc8a", "电量健康"),
     (30, "#f5c451", "电量中等"),
     (0,  "#ff6b6b", "电量偏低"),
 ]
@@ -152,7 +97,7 @@ def level_color(level: Optional[int]) -> str:
 
 
 class DeviceCard:
-    """一块设备卡片。"""
+    """一个设备卡片"""
 
     def __init__(self, parent, title: str):
         import tkinter as tk
@@ -161,7 +106,7 @@ class DeviceCard:
         self.frame = ttk.Frame(parent, style="Card.TFrame", padding=16)
         self.lab_title = ttk.Label(self.frame, text=title, style="CardTitle.TLabel")
         self.lab_title.pack(anchor="w")
-        self.lab_sub = ttk.Label(self.frame, text="正在读取…", style="CardSub.TLabel")
+        self.lab_sub = ttk.Label(self.frame, text="正在读取...", style="CardSub.TLabel")
         self.lab_sub.pack(anchor="w", pady=(2, 0))
 
         self.lab_level = ttk.Label(self.frame, text="--", style="CardBig.TLabel")
@@ -169,375 +114,147 @@ class DeviceCard:
         self.lab_status = ttk.Label(self.frame, text="", style="CardSub.TLabel")
         self.lab_status.pack(anchor="w")
 
-        self.bar = ttk.Progressbar(self.frame, mode="determinate", maximum=100,
-                                   style="Card.Horizontal.TProgressbar")
-        self.bar.pack(fill="x", pady=(10, 8))
+        # 进度条
+        self.canvas = tk.Canvas(self.frame, height=6, bg=PANEL2, highlightthickness=0)
+        self.canvas.pack(fill="x", pady=(10, 4))
+        self._bar = None
 
-        self.lab_detail = ttk.Label(self.frame, text="", style="CardSub.TLabel",
-                                    wraplength=250, justify="left")
-        self.lab_detail.pack(anchor="w")
-        self.lab_extra = ttk.Label(self.frame, text="", style="CardSub.TLabel",
-                                   wraplength=250, justify="left")
+        self.lab_extra = ttk.Label(self.frame, text="", style="CardSub.TLabel")
         self.lab_extra.pack(anchor="w", pady=(4, 0))
 
-    def update(self, r: Reading) -> None:
-        self.lab_sub.configure(text=r.subtitle)
+    def update_view(self, r: BatteryReading) -> None:
         if r.ok:
-            self.lab_level.configure(text=f"{r.level}%",
-                                     foreground=level_color(r.level))
-            st = r.status if r.status not in ("未知", "状态未知") else ""
-            self.lab_status.configure(text=st)
-            self.bar["value"] = r.level or 0
-            self.lab_detail.configure(text=r.detail)
-            self.lab_extra.configure(text=r.extra)
+            color = level_color(r.level)
+            self.lab_level.config(text=f"{r.level}%", foreground=color)
+            sub_text = r.status or "正常工作"
+            if r.is_charging:
+                sub_text += " (充电中 ⚡)"
+            self.lab_sub.config(text=sub_text, foreground=color)
+            self.lab_status.config(text=r.detail or "", foreground=MUTED)
+            self.lab_extra.config(text="")
+
+            # 绘制进度条
+            w = self.canvas.winfo_width()
+            if w <= 1:
+                w = 200
+            fill_w = max(0, min(w, int(w * (r.level / 100.0))))
+            self.canvas.delete("all")
+            self.canvas.create_rectangle(0, 0, fill_w, 6, fill=color, width=0)
         else:
-            self.lab_level.configure(text="--", foreground=MUTED)
-            self.lab_status.configure(text="")
-            self.bar["value"] = 0
-            self.lab_detail.configure(text=r.error)
-            self.lab_extra.configure(text="")
+            self.lab_level.config(text="--", foreground=MUTED)
+            self.lab_sub.config(text="未连接 / 休眠", foreground=MUTED)
+            self.lab_status.config(text=r.error or "设备无响应", foreground="#ff6b6b")
+            self.lab_extra.config(text="")
+            self.canvas.delete("all")
 
 
-def build_ui():
-    import tkinter as tk
-    from tkinter import ttk
+class MainApp:
+    def __init__(self, root):
+        import tkinter as tk
+        from tkinter import ttk
 
-    root = tk.Tk()
-    root.title(tc.UI_TITLE)
-    root.configure(bg=BG)
-    root.geometry("680x470")
-    root.minsize(620, 440)
+        self.root = root
+        self.root.title("外设电量监控 (GPW3 + MAG75)")
+        self.root.configure(bg=BG)
+        self.root.geometry("420x460")
+        self.root.minsize(380, 380)
 
-    style = ttk.Style(root)
-    style.theme_use("clam")
-    style.configure(".", background=BG, foreground=FG, font=FONT)
-    style.configure("TFrame", background=BG)
-    style.configure("Card.TFrame", background=PANEL)
-    style.configure("Panel.TFrame", background=PANEL)
-    style.configure("TLabel", background=BG, foreground=FG, font=FONT)
-    style.configure("H1.TLabel", background=BG, foreground=FG,
-                    font=("Microsoft YaHei UI", 15, "bold"))
-    style.configure("Muted.TLabel", background=BG, foreground=MUTED,
-                    font=("Microsoft YaHei UI", 9))
-    style.configure("CardTitle.TLabel", background=PANEL, foreground=FG,
-                    font=("Microsoft YaHei UI", 12, "bold"))
-    style.configure("CardSub.TLabel", background=PANEL, foreground=MUTED,
-                    font=("Microsoft YaHei UI", 9))
-    style.configure("CardBig.TLabel", background=PANEL, foreground="#5ddc8a",
-                    font=("Microsoft YaHei UI", 40, "bold"))
-    style.configure("Card.Horizontal.TProgressbar", background="#4f8cff",
-                    troughcolor=PANEL2, borderwidth=0, thickness=8)
-    style.configure("TButton", background=PANEL2, foreground=FG, borderwidth=0,
-                    focusthickness=0, padding=(14, 7), font=FONT)
-    style.map("TButton", background=[("active", "#3a3f47"), ("disabled", "#2a2c30")],
-              foreground=[("disabled", "#6b7076")])
-    style.configure("Accent.TButton", background="#4f8cff", foreground="#ffffff")
-    style.map("Accent.TButton", background=[("active", "#6ea1ff")])
-    style.configure("TCheckbutton", background=BG, foreground=FG, font=FONT)
-    style.configure("TCombobox", fieldbackground=PANEL2, background=PANEL2,
-                    foreground=FG)
+        # 样式
+        style = ttk.Style(self.root)
+        style.theme_use("clam")
+        style.configure(".", background=BG, foreground=FG, font=FONT)
+        style.configure("Card.TFrame", background=PANEL)
+        style.configure("CardTitle.TLabel", font=("Microsoft YaHei UI", 12, "bold"), foreground=FG, background=PANEL)
+        style.configure("CardSub.TLabel", font=("Microsoft YaHei UI", 9), foreground=MUTED, background=PANEL)
+        style.configure("CardBig.TLabel", font=("Microsoft YaHei UI", 26, "bold"), background=PANEL)
 
-    state = {"busy": False, "auto": True, "interval": 60, "after_id": None,
-             "starting": False, "started_at": 0.0}
-    # Tkinter 不是线程安全的：后台线程只往队列里放结果，主线程统一取出来处理
-    results: "queue.Queue[tuple]" = queue.Queue()
+        # 头部
+        top_frame = ttk.Frame(root, padding=(16, 16, 16, 8))
+        top_frame.pack(fill="x")
+        lab_header = ttk.Label(top_frame, text="外设电量实时监控", font=("Microsoft YaHei UI", 14, "bold"))
+        lab_header.pack(side="left")
 
-    cfg = tc.load_config()
-    state["interval"] = int(cfg["interval"])
+        self.btn_refresh = tk.Button(
+            top_frame, text="刷新", bg=PANEL2, fg=FG, activebackground=PANEL,
+            activeforeground=FG, bd=0, padx=12, pady=4, cursor="hand2",
+            font=("Microsoft YaHei UI", 9), command=self.trigger_refresh
+        )
+        self.btn_refresh.pack(side="right")
 
-    # ---- 顶部 ----
-    head = ttk.Frame(root, padding=(18, 16, 18, 8))
-    head.pack(fill="x")
-    ttk.Label(head, text=tc.UI_TITLE, style="H1.TLabel").pack(side="left")
+        # 卡片容器
+        self.cards_frame = ttk.Frame(root, padding=16)
+        self.cards_frame.pack(fill="both", expand=True)
 
-    v_auto = tk.BooleanVar(value=True)
-    v_interval = tk.StringVar(
-        value=dict((s, l) for s, l in tc.INTERVAL_CHOICES).get(state["interval"], "1 分钟"))
+        self.cards: Dict[str, DeviceCard] = {}
+        self.cfg = load_config()
+        for dev in self.cfg.get("devices", []):
+            if not dev.get("enabled", True):
+                continue
+            card = DeviceCard(self.cards_frame, dev["name"])
+            card.frame.pack(fill="x", pady=6)
+            self.cards[dev["id"]] = card
 
-    def on_auto():
-        state["auto"] = v_auto.get()
-        _reschedule()
+        # 底部状态栏
+        bottom_frame = ttk.Frame(root, padding=(16, 8, 16, 12))
+        bottom_frame.pack(fill="x", side="bottom")
+        self.lab_time = ttk.Label(bottom_frame, text="就绪", font=("Microsoft YaHei UI", 8), foreground=MUTED)
+        self.lab_time.pack(side="left")
 
-    btn = ttk.Button(head, text="立即刷新", style="Accent.TButton")
-    btn.pack(side="right")
-    ttk.Checkbutton(head, text="自动刷新", variable=v_auto,
-                    command=on_auto).pack(side="right", padx=(0, 12))
+        self.queue: queue.Queue = queue.Queue()
+        self._closing = False
 
-    # ---- 卡片 ----
-    body = ttk.Frame(root, padding=(18, 4, 18, 4))
-    body.pack(fill="both", expand=True)
-    body.columnconfigure(0, weight=1, uniform="card")
-    body.columnconfigure(1, weight=1, uniform="card")
-    body.rowconfigure(0, weight=1)
+        # 启动后台刷新
+        self.trigger_refresh()
+        self.schedule_next_poll()
+        self.check_queue()
 
-    card_atk = DeviceCard(body, "ATK 鼠标")
-    card_atk.frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-    card_dr = DeviceCard(body, "DARKRIM 耳机")
-    card_dr.frame.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+    def schedule_next_poll(self):
+        interval_ms = int(self.cfg.get("poll_interval_sec", 30)) * 1000
+        self.root.after(interval_ms, self._on_timer)
 
-    foot = ttk.Label(root, text="正在读取…", style="Muted.TLabel", padding=(18, 4))
-    foot.pack(fill="x", side="bottom")
+    def _on_timer(self):
+        if not self._closing:
+            self.trigger_refresh()
+            self.schedule_next_poll()
 
-    # ---- 设置区 ----
-    setbar = ttk.Frame(root, style="Panel.TFrame", padding=(14, 10))
-    setbar.pack(fill="x", padx=18, pady=(2, 8))
+    def trigger_refresh(self):
+        self.btn_refresh.config(state="disabled", text="读取中...")
+        self.lab_time.config(text="正在与硬件通信...")
+        threading.Thread(target=self._worker_read, daemon=True).start()
 
-    def refresh_tray_state():
-        if state.get("starting"):
-            return                              # 正在启动，别覆盖提示文字
-        if state.get("notice") and time.time() < state.get("notice_until", 0):
-            lab_tray.configure(text=state["notice"])   # 临时提示优先显示
-            btn_tray.configure(state="normal",
-                               text="退出托盘程序" if tc.is_tray_running()
-                               else "启动托盘程序")
-            return
-        state["notice"] = ""
-        running = tc.is_tray_running()
-        btn_tray.configure(state="normal",
-                           text="退出托盘程序" if running else "启动托盘程序")
-        lab_tray.configure(text="托盘运行中：右键托盘图标即可打开本窗口"
-                                if running else "托盘未运行：不会后台自动刷新")
+    def _worker_read(self):
+        results = read_all_devices()
+        self.queue.put(results)
 
-    def notify(text: str, seconds: float = 8.0) -> None:
-        """在状态标签上显示一条临时提示。"""
-        state["notice"] = text
-        state["notice_until"] = time.time() + seconds
-        refresh_tray_state()
-
-    def on_interval(_event=None):
-        sec = dict((label, sec) for sec, label in tc.INTERVAL_CHOICES)[v_interval.get()]
-        cfg["interval"] = sec
-        tc.save_config(cfg)
-        state["interval"] = sec
-        tc.post_to_tray(tc.MSG_RELOAD)      # 让托盘立刻换间隔
-        _reschedule()
-        refresh()
-
-    def on_boot():
-        want = bool(v_boot.get())
-        ok = tc.set_autostart(want)
-        cfg["autostart"] = want
-        tc.save_config(cfg)
-        tc.post_to_tray(tc.MSG_RELOAD)
-        if want and not ok:
-            notify("开机自启设置失败：无法创建启动文件夹快捷方式")
-        elif want:
-            notify("已加入开机自启（任务管理器 →「启动」标签里能看到 电量托盘）", 12)
-        else:
-            notify("已取消开机自启")
-
-    def tray_done(ok: bool):
-        state["starting"] = False
-        refresh_tray_state()
-        if not ok:
-            notify("启动失败：可双击桌面「电量托盘」再试", 12)
-
-    def on_links():
-        btn_link.configure(state="disabled", text="正在创建…")
-
-        def work():
-            try:
-                r = tc.install_desktop_links()
-            except Exception as e:
-                traceback.print_exc()
-                r = {"folder": "", "links": {}, "errors": [str(e)]}
-            results.put(("links", r))
-
-        threading.Thread(target=work, daemon=True).start()
-
-    def links_done(r: dict):
-        import tkinter.messagebox as mb
-        btn_link.configure(state="normal", text="重建桌面链接")
-        bits = []
-        kind = r.get("folder") or ""
-        if kind:
-            bits.append(f"文件夹→{win_link.KIND_LABEL.get(kind, kind)}")
-        for name, k in (r.get("links") or {}).items():
-            bits.append(f"{name}→{win_link.KIND_LABEL.get(k, k)}")
-        if bits:
-            notify("桌面链接已更新：" + "；".join(bits), 12)
-        else:
-            notify("桌面链接创建失败", 12)
-        if r.get("errors"):
-            mb.showwarning("桌面链接", "\n".join(r["errors"]))
-
-    def on_tray_toggle():
-        if tc.is_tray_running():
-            tc.post_to_tray(tc.MSG_QUIT)
-            for delay in (600, 1500, 3000):
-                root.after(delay, refresh_tray_state)
-            return
-
-        # 启动要等托盘窗口真正出现（pythonw 是静默进程），放后台线程做，别卡界面
-        state["starting"] = True
-        state["started_at"] = time.time()
-        btn_tray.configure(state="disabled", text="正在启动…")
-        lab_tray.configure(text="正在启动托盘程序…")
-
-        def work():
-            try:
-                ok = tc.start_tray_app()
-            except Exception:
-                traceback.print_exc()
-                ok = False
-            results.put(("tray", ok))          # 交给主线程处理
-
-        threading.Thread(target=work, daemon=True).start()
-
-    # 设置区：第一行放设置项，第二行放托盘相关按钮与状态
-    row_a = ttk.Frame(setbar, style="Panel.TFrame")
-    row_a.pack(fill="x")
-    row_b = ttk.Frame(setbar, style="Panel.TFrame")
-    row_b.pack(fill="x", pady=(9, 0))
-
-    ttk.Label(row_a, text="设置", style="CardTitle.TLabel").pack(side="left")
-    ttk.Label(row_a, text="刷新间隔", style="CardSub.TLabel").pack(side="left", padx=(16, 6))
-    combo = ttk.Combobox(row_a, textvariable=v_interval, width=8, state="readonly",
-                         values=[label for _, label in tc.INTERVAL_CHOICES])
-    combo.pack(side="left")
-    combo.bind("<<ComboboxSelected>>", on_interval)
-
-    v_boot = tk.BooleanVar(value=tc.is_autostart_enabled())
-    ttk.Checkbutton(row_a, text="开机自启（任务管理器可见）", variable=v_boot,
-                    command=on_boot).pack(side="left", padx=(18, 0))
-
-    btn_tray = ttk.Button(row_b, text="退出托盘程序", command=on_tray_toggle)
-    btn_tray.pack(side="right")
-    btn_link = ttk.Button(row_b, text="重建桌面链接", command=on_links)
-    btn_link.pack(side="right", padx=(0, 8))
-    lab_tray = ttk.Label(row_b, text="", style="CardSub.TLabel")
-    lab_tray.pack(side="right", padx=(0, 12))
-    refresh_tray_state()
-
-    # ---- 刷新逻辑 ----
-    def apply(readings: list[Reading]):
-        card_atk.update(readings[0])
-        card_dr.update(readings[1])
-        ok = sum(1 for r in readings if r.ok)
-        foot.configure(text=f"更新于 {time.strftime('%H:%M:%S')}   "
-                            f"成功读取 {ok}/2 个设备"
-                            + ("" if state["auto"] else "   （自动刷新已关闭）"))
-        state["busy"] = False
-        btn.configure(state="normal")
-
-    def worker():
-        try:
-            readings = read_all()
-        except Exception:
-            traceback.print_exc()
-            readings = [Reading("ATK 鼠标", "", error="读取异常"),
-                        Reading("DARKRIM 耳机", "", error="读取异常")]
-        results.put(("readings", readings))
-
-    def refresh():
-        if state["busy"]:
-            return
-        state["busy"] = True
-        btn.configure(state="disabled")
-        foot.configure(text="正在读取…（耳机的协议要几秒钟）")
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _reschedule():
-        if state["after_id"]:
-            root.after_cancel(state["after_id"])
-            state["after_id"] = None
-        if state["auto"]:
-            state["after_id"] = root.after(state["interval"] * 1000, _tick)
-
-    def _tick():
-        refresh()
-        _reschedule()
-
-    btn.configure(command=refresh)
-
-    root.after(300, refresh)
-    _reschedule()
-
-    # 主线程统一处理后台线程的结果 + 跟随托盘状态
-    def pump():
+    def check_queue(self):
         try:
             while True:
-                kind, payload = results.get_nowait()
-                if kind == "readings":
-                    apply(payload)
-                elif kind == "tray":
-                    tray_done(payload)
-                elif kind == "links":
-                    links_done(payload)
+                results = self.queue.get_nowait()
+                for r in results:
+                    if r.device_id in self.cards:
+                        self.cards[r.device_id].update_view(r)
+                now_str = time.strftime("%H:%M:%S")
+                self.lab_time.config(text=f"最后更新: {now_str} (每 30 秒自动刷新)")
+                self.btn_refresh.config(state="normal", text="刷新")
         except queue.Empty:
             pass
-        except Exception:
-            traceback.print_exc()
-            state["busy"] = False
-            state["starting"] = False
-            btn.configure(state="normal")
 
-        # 兜底：启动流程万一卡住，20 秒后放开按钮，别让它永久禁用
-        if state["starting"] and time.time() - state["started_at"] > 20:
-            state["starting"] = False
-            refresh_tray_state()
-
-        refresh_tray_state()        # FindWindowW 很便宜，顺带同步托盘状态
-        root.after(1000, pump)
-
-    root.after(1000, pump)
-    # 托盘右键打开时保证窗口到前台
-    def raise_me():
-        try:
-            root.lift()
-            root.focus_force()
-        except Exception:
-            pass
-    root.after(250, raise_me)
-    return root
+        if not self._closing:
+            self.root.after(200, self.check_queue)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="我的设备电量")
-    parser.add_argument("--once", action="store_true", help="命令行读一次就退出")
-    parser.add_argument("--install-links", action="store_true",
-                        help="在桌面重建软连接（项目文件夹 + 启动脚本）")
-    parser.add_argument("--autostart", choices=["on", "off", "status"],
-                        help="开机自启：on 打开 / off 关闭 / status 查看")
+def main():
+    parser = argparse.ArgumentParser(description="我的外设电量查看器")
+    parser.add_argument("--once", action="store_true", help="命令行只读一次并退出")
     args = parser.parse_args()
-
-    if args.install_links:
-        r = tc.install_desktop_links()
-        print("桌面链接：")
-        print(f"  项目文件夹 {tc.DESKTOP_LINK_NAME} -> "
-              f"{win_link.KIND_LABEL.get(r['folder'], r['folder'] or '创建失败')}")
-        for name, kind in r["links"].items():
-            print(f"  {name} -> {win_link.KIND_LABEL.get(kind, kind)}")
-        for msg in r["errors"]:
-            print("  注意：", msg)
-        return
-
-    if args.autostart:
-        if args.autostart == "status":
-            st = tc.autostart_status()
-            print("开机自启：", "已启用" if st["enabled"] else "未启用")
-            print("  方式：", st["method"])
-            print("  快捷方式：", st["shortcut"],
-                  "(存在)" if st["shortcut_exists"] else "(不存在)")
-            print("  任务管理器状态：", st["taskmanager_state"])
-            print("  目标：", st["target"])
-            print("  旧注册表项：", "还在" if st["legacy_registry"] else "已清理")
-        else:
-            ok = tc.set_autostart(args.autostart == "on")
-            print("已" + ("加入" if args.autostart == "on" else "取消") + "开机自启",
-                  "" if ok else "（失败）")
-        return
 
     if args.once:
         cli_once()
         return
-    try:
-        root = build_ui()
-    except Exception:
-        print("无法启动图形界面，改用命令行模式：")
-        traceback.print_exc()
-        cli_once()
-        return
+
+    import tkinter as tk
+    root = tk.Tk()
+    app = MainApp(root)
     root.mainloop()
 
 

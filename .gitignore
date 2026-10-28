@@ -17,3 +17,6 @@ tray_config.json
 .idea/
 Thumbs.db
 desktop.ini
+
+# 厂商网页驱动源码（版权归厂商，仅本地逆向参考）
+vkhub.js

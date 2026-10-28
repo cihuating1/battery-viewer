@@ -1,0 +1,34 @@
+{
+  "poll_interval_sec": 30,
+  "tray_show_number": false,
+  "devices": [
+    {
+      "id": "gpw3",
+      "name": "罗技 G PRO X SUPERLIGHT 2",
+      "title": "GPW3 (狗屁王三代)",
+      "short_name": "GPW3 鼠标",
+      "subtitle": "PRO X SUPERLIGHT 2 · 2.4G",
+      "glyph": "mouse",
+      "enabled": true,
+      "driver": "logitech_hidpp",
+      "params": {
+        "vid": "0x046D",
+        "pid": "0xC54D"
+      }
+    },
+    {
+      "id": "mag75max",
+      "name": "瓦尔基里 VK MAG75 Max 磁轴键盘",
+      "title": "VK MAG75 Max",
+      "short_name": "MAG75 Max 键盘",
+      "subtitle": "MAG75 MAX · 2.4G 磁轴",
+      "glyph": "keyboard",
+      "enabled": true,
+      "driver": "valkyrie_mag",
+      "params": {
+        "vid": "0x374A",
+        "pid": "0xA223"
+      }
+    }
+  ]
+}
