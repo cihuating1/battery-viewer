@@ -19,6 +19,7 @@ from drivers import headsetcontrol as hsc
 VENDOR_DRIVERS = {
     0x046D: ("logitech_hidpp", "mouse"),    # Logitech（Lightspeed / Unifying 接收器、有线模式）
     0x374A: ("valkyrie_mag", "keyboard"),   # VALKYRIE 瓦尔基里
+    0x20BC: ("betop", "controller"),        # BETOP 北通手柄（鲲鹏 70 实测）
     # 以下走 hid_universal（battery.py 内置协议表）
     0x373B: ("hid_universal", "mouse"),     # ATK（协议 1：0xFF02 / 协议 2：0xFF05）
     0x3554: ("hid_universal", "mouse"),     # VXE / VGN
@@ -157,7 +158,7 @@ def _scan_hid(skip: set[str], probe: bool) -> list[Candidate]:
             if c.key in skip:
                 continue
             out.append(_probe(c) if probe else c)
-        elif any(i.is_vendor_page for i in items):
+        elif any(i.is_vendor_page or i.usage_page == 0x00FF for i in items):  # 0x00FF 也常被厂商私用
             # 带厂商私有接口的外设：先试标准 HID 电量字段，读到了就当作可添加
             c = Candidate(key=candidate_key("hid_universal", params), name=name, driver="hid_universal",
                           params=params, glyph=guess_glyph(name, default_glyph), source="2.4G / USB")

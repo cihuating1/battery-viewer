@@ -16,6 +16,7 @@ from .template import TemplateDriver
 from .bluetooth import BluetoothDriver
 from .headsetcontrol import HeadsetcontrolDriver
 from .hid_universal import HidUniversalDriver
+from .betop import BetopDriver
 
 # 显式注册（PyInstaller 打包后 pkgutil 扫描不到源文件时兜底）
 DRIVER_REGISTRY: Dict[str, Type[BaseDriver]] = {
@@ -25,6 +26,7 @@ DRIVER_REGISTRY: Dict[str, Type[BaseDriver]] = {
     "bluetooth": BluetoothDriver,
     "headsetcontrol": HeadsetcontrolDriver,
     "hid_universal": HidUniversalDriver,
+    "betop": BetopDriver,
 }
 
 

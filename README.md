@@ -29,6 +29,7 @@ python chargedock_app.py      # 或双击 run_chargedock.bat（无控制台窗�
 | 耳机 | `headsetcontrol` | 借用 [HeadsetControl](https://github.com/Sapd/HeadsetControl) 的协议库（SteelSeries / Logitech / Corsair / HyperX 等几十款）。需下载 `headsetcontrol.exe` 放到 `tools/` 目录或 PATH |
 | 罗技 2.4G / 有线 | `logitech_hidpp` | HID++ 2.0，大多数 Lightspeed / Unifying 设备通用 |
 | 瓦尔基里 | `valkyrie_mag` | VK MAG75 Max 等（WebHID 0xF7 指令） |
+| 北通手柄 | `betop` | 鲲鹏 70 实测（被动监听状态包，不发送命令）；无线 / 插线均可读 |
 | ATK / VXE / VGN、Endgame Gear、VAXEE、Nordic、DARKRIM | `hid_universal` | 复用原项目 `battery.py` 的内置协议表；同时会尝试 HID 标准电量字段，任何按标准上报的设备都能读 |
 
 小厂 / 白牌的 2.4G 设备没有公开协议，扫描时会显示为「暂无驱动」并附 VID/PID，
